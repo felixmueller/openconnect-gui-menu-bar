@@ -1,6 +1,13 @@
 #!/bin/bash
 # Credit for original concept and initial work to: Jesse Jarzynka
 
+# Updated by: Felix Mueller (2-24-19)
+#   * added server cert and authgroup parameters
+#   * added vpnc-script parameter
+#   * removed Duo/Yubikey/Google Authenticator
+#   * added custom profile for split tunneling
+#   * changed icons
+
 # Updated by: Ventz Petkov (8-31-18)
 #   * merged feature for token/pin input (ex: Duo/Yubikey/Google Authenticator) contributed by Harry Hoffman <hhoffman@ip-solutions.net>
 #   * added option to pick "push/sms/phone" (ex: Duo) vs token/pin (Yubikey/Google Authenticator/Duo)
@@ -28,48 +35,43 @@
 # USER CHANGES #
 #########################################################
 
-# 1.) Updated your sudo config with (edit "osx-username" with your username):
-#osx-username ALL=(ALL) NOPASSWD: /usr/local/bin/openconnect
-#osx-username ALL=(ALL) NOPASSWD: /usr/bin/killall -2 openconnect
-
+# 1.) Updated your sudo config with (sudo visudo -f /etc/sudoers):
+# # openconnect
+# %admin ALL=(ALL) NOPASSWD: /usr/local/bin/openconnect
+# %admin ALL=(ALL) NOPASSWD: /usr/bin/killall -2 openconnect
 
 # 2.) Make sure openconnect binary is located here:
 #     (If you don't have it installed: "brew install openconnect")
 VPN_EXECUTABLE=/usr/local/bin/openconnect
 
+# 3.) Update your vpnc-script
+VPN_CUSTOM_SCRIPT=/usr/local/etc/vpnc-custom
 
-# 3.) Update your AnyConnect VPN host
+# 4.) Update your AnyConnect VPN host
 VPN_HOST="vpn.domain.tld"
 
-# 4.) Update your AnyConnect username + tunnel
-VPN_USERNAME="vpn_username@domain.tld#VPN_TUNNEL_OPTIONALLY"
+# 5.) Update your Server cert
+VPN_SERVERCERT="pin-sha256:8fj57980h3fw7h5908v37098537n3908="
 
-# 5.) Push 2FA (ex: Duo), or Pin/Token (ex: Yubikey, Google Authenticator, TOTP)
-PUSH_OR_PIN="push"
-#PUSH_OR_PIN="Yubikey"
-# ---
-# * For Push (and other Duo specifics), options include:
-# "push", "sms", or "phone"
-# ---
-# * For Yubikey/Google Authenticator/other TOTP, specify any name for prompt:
-# "any-name-of-product-to-be-prompted-about"
-# PUSH_OR_PIN="Yubikey" | PUSH_OR_PIN="Google Authenticator" | PUSH_OR_PIN="Duo"
-# (essentially, anything _other_ than the "push", "sms", or "phone" options)
-# ---
+# 6.) Update your AnyConnect username
+VPN_USERNAME="username"
 
-# 6.) Create an encrypted password entry in your OS X Keychain:
-#      a.) Open "Keychain Access" and 
-#      b.) Click on "login" keychain (top left corner)
-#      c.) Click on "Passwords" category (bottom left corner)
-#      d.) From the "File" menu, select -> "New Password Item..."
-#      e.) For "Keychain Item Name" and "Account Name" use the value for "VPN_HOST" and "VPN_USERNAME" respectively
-#      f.) For "Password" enter your VPN AnyConnect password.
+# 7.) Update your Auth group
+VPN_AUTHGROUP="authgroup"
+
+# 8.) Create an encrypted password entry in your OS X Keychain:
+#     a.) Open "Keychain Access" and 
+#     b.) Click on "login" keychain (top left corner)
+#     c.) Click on "Passwords" category (bottom left corner)
+#     d.) From the "File" menu, select -> "New Password Item..."
+#     e.) For "Keychain Item Name" and "Account Name" use the value for "VPN_HOST" and "VPN_USERNAME" respectively
+#     f.) For "Password" enter your VPN AnyConnect password.
 
 # This will retrieve that password securely at run time when you connect, and feed it to openconnect
 # No storing passwords unenin plain text files! :)
 GET_VPN_PASSWORD="security find-generic-password -wl $VPN_HOST"
 
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#########################################################
 # END-OF-USER-SETTINGS #
 #########################################################
 
@@ -80,36 +82,24 @@ VPN_CONNECTED="/sbin/ifconfig | grep -A3 $VPN_INTERFACE | grep inet"
 # Command to run to disconnect VPN
 VPN_DISCONNECT_CMD="sudo killall -2 openconnect"
 
-# GUI Prompt for your token/key (ex: Duo/Yubikey/Google Authenticator)
-function prompt_2fa_method() {		
-	if [ "$1" == "push" ]; then
-		echo "push"
-	elif [ "$1" == "sms" ]; then
-		echo "sms"
-	elif [ "$1" == "phone" ]; then
-		echo "phone"
-	else
-		osascript <<EOF
-		tell app "System Events"
-			text returned of (display dialog "Enter $1 token:" default answer "" buttons {"OK"} default button 1 with title "$(basename $0)")
-		end tell
-EOF
-	fi
-}
-
-
 case "$1" in
     connect)
         VPN_PASSWORD=$(eval "$GET_VPN_PASSWORD")
         # VPN connection command, should eventually result in $VPN_CONNECTED,
         # may need to be modified for VPN clients other than openconnect
-
-        # Connect based on your 2FA selection (see: $PUSH_OR_PIN for options)
-        # For anything else (non-duo) - you would provide your token (see: stoken)
-        echo -e "${VPN_PASSWORD}\n$(prompt_2fa_method ${PUSH_OR_PIN})\n" | sudo "$VPN_EXECUTABLE" -u "$VPN_USERNAME" -i "$VPN_INTERFACE" "$VPN_HOST" &> /dev/null &
+        echo -e "${VPN_PASSWORD}" | sudo "$VPN_EXECUTABLE" -u "$VPN_USERNAME" --passwd-on-stdin --authgroup "$VPN_AUTHGROUP" -i "$VPN_INTERFACE" "$VPN_HOST" --no-xmlpost --servercert "$VPN_SERVERCERT" &> /dev/null &
 
         # Wait for connection so menu item refreshes instantly
-        until eval "$VPN_CONNECTED"; do sleep 1; done
+        until eval "$VPN_CONNECTED"; do sleep 3; done
+        ;;
+    connect_split)
+        VPN_PASSWORD=$(eval "$GET_VPN_PASSWORD")
+        # VPN connection command, should eventually result in $VPN_CONNECTED,
+        # may need to be modified for VPN clients other than openconnect
+        echo -e "${VPN_PASSWORD}" | sudo "$VPN_EXECUTABLE" -u "$VPN_USERNAME" --passwd-on-stdin --authgroup "$VPN_AUTHGROUP" -i "$VPN_INTERFACE" "$VPN_HOST" --no-xmlpost --servercert "$VPN_SERVERCERT" --script "$VPN_CUSTOM_SCRIPT" &> /dev/null &
+
+        # Wait for connection so menu item refreshes instantly
+        until eval "$VPN_CONNECTED"; do sleep 3; done
         ;;
     disconnect)
         eval "$VPN_DISCONNECT_CMD"
@@ -118,19 +108,15 @@ case "$1" in
         ;;
 esac
 
-
 if [ -n "$(eval "$VPN_CONNECTED")" ]; then
-    echo "VPN 🔒"
+    echo "| image=iVBORw0KGgoAAAANSUhEUgAAACYAAAAiCAYAAAAzrKu4AAAAAXNSR0IArs4c6QAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABHppVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iCiAgICAgICAgICAgIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgICAgICAgICAgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIj4KICAgICAgICAgPHhtcE1NOkRlcml2ZWRGcm9tIHJkZjpwYXJzZVR5cGU9IlJlc291cmNlIj4KICAgICAgICAgICAgPHN0UmVmOmluc3RhbmNlSUQ+eG1wLmlpZDpGQTdGMTE3NDA3MjA2ODExODNEMUQ5M0NCNjUwQUFDNDwvc3RSZWY6aW5zdGFuY2VJRD4KICAgICAgICAgICAgPHN0UmVmOmRvY3VtZW50SUQ+eG1wLmRpZDpCMzQ0NDBBNDI3MjA2ODExODA4M0QyQTNDOEI4OERCNTwvc3RSZWY6ZG9jdW1lbnRJRD4KICAgICAgICAgPC94bXBNTTpEZXJpdmVkRnJvbT4KICAgICAgICAgPHhtcE1NOkRvY3VtZW50SUQ+eG1wLmRpZDpEMDk3RDE1RTFCQjkxMUU0QjQwMzgxMjIzMzNFNzhCNDwveG1wTU06RG9jdW1lbnRJRD4KICAgICAgICAgPHhtcE1NOkluc3RhbmNlSUQ+eG1wLmlpZDpEMDk3RDE1RDFCQjkxMUU0QjQwMzgxMjIzMzNFNzhCNDwveG1wTU06SW5zdGFuY2VJRD4KICAgICAgICAgPHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD54bXAuZGlkOkIzNDQ0MEE0MjcyMDY4MTE4MDgzRDJBM0M4Qjg4REI1PC94bXBNTTpPcmlnaW5hbERvY3VtZW50SUQ+CiAgICAgICAgIDx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+CiAgICAgICAgIDx4bXA6Q3JlYXRvclRvb2w+QWRvYmUgUGhvdG9zaG9wIENTNiAoTWFjaW50b3NoKTwveG1wOkNyZWF0b3JUb29sPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4K1WhhigAAAn1JREFUWAnNmLtqVVEQho8GY6NEbb0UFmJjCkF9AiOKaWziS2hKK2GnSvqIb2GhnViLhYg+gSkU74pioZIi/l84A3PGfVmXcyQDP+sy8/8z2WutffbKaLRHbV9mXQcUf0W4LFwQTgtHBOy78Fp4LjwRHgvbwkyN5I3wSdhJxGfFNYIVru507abkPgipBcU4uGhMzeakdF+IiUrHaKFZZQg8ENqK+Kb5e8KycEqYFw4LZwXm8BHTxkWzqrjNFuFfmrsrHBKGjBhi4cQCKbzIVsSKYluaWyxQOycO3KhHjizjBH0UvNAbjU9kqUwGw0XDa5Ij67Q2QYCluCTUGhpo+eKaVFE2cXxPraeSE+I2FOMLIxc5B+26IjyRk7UwyJpRwH6nu+T6dB8JP8Lcfxv6ws6HrA/DuHTIct0Wngk/x6DPXNJSxv11UsRaOy6Bl4LfIr6Pj5he+yOvJyX9NT2K8PuKslyvFHewR2cUC+NnpsZuiWzJ0Wbpjo1B3+cjttPiUp7pjExzsI+ssNUWyh3nJ7bTnspjQrQ3OiPTHP6J8KSiMWf5fkenP5UvgnM5jGc57P3SjS/Yr6pkoaKaqifm83KKvgj2eGnXfUBmP6cw3m+91sjrC+OH92Iv41/nVU29E7xOSh8O3FabxmdPSVFWONxOW5HHAq3d0txiJ2PSYZzSdlItjPj8jcIsK3tu6AMv8nLHoZTJYcplhFPMZYRLMDDLLSTGm05nS3E51zcTiolyx6Yz2HJZjfeAtmQm1ObLmTOdpJZ9tSbE95xPaEJ+rqS/q1P6T5Ulse2fKkfHFc2PW4qpsdyaknPVvMfeJ2cpCLwmDglyl/GtOHD3tv0Flimq4mIzN7UAAAAASUVORK5CYII="
     echo '---'
-    echo "Disconnect VPN | bash='$0' param1=disconnect terminal=false refresh=true"
+    echo "VPN trennen | bash='$0' param1=disconnect terminal=false refresh=true image=iVBORw0KGgoAAAANSUhEUgAAACAAAAAiCAYAAAA+stv/AAAAAXNSR0IArs4c6QAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABBNpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iCiAgICAgICAgICAgIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iCiAgICAgICAgICAgIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj4KICAgICAgICAgPHhtcE1NOkRlcml2ZWRGcm9tIHJkZjpwYXJzZVR5cGU9IlJlc291cmNlIj4KICAgICAgICAgICAgPHN0UmVmOmluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyQTM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6aW5zdGFuY2VJRD4KICAgICAgICAgICAgPHN0UmVmOmRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyQjM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6ZG9jdW1lbnRJRD4KICAgICAgICAgPC94bXBNTTpEZXJpdmVkRnJvbT4KICAgICAgICAgPHhtcE1NOkRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyRDM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0NzwveG1wTU06RG9jdW1lbnRJRD4KICAgICAgICAgPHhtcE1NOkluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyQzM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0NzwveG1wTU06SW5zdGFuY2VJRD4KICAgICAgICAgPHhtcDpDcmVhdG9yVG9vbD5BZG9iZSBQaG90b3Nob3AgQ1M2IChNYWNpbnRvc2gpPC94bXA6Q3JlYXRvclRvb2w+CiAgICAgICAgIDx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+CiAgICAgIDwvcmRmOkRlc2NyaXB0aW9uPgogICA8L3JkZjpSREY+CjwveDp4bXBtZXRhPgp78tFiAAAEwUlEQVRYCeVX70udZRi+Xn09Ot08NpubNVluOEn7cATD2Lc18oOwJbUWCBOCxqA+9x9EUGEwiFNfXEJLsiLMYgmVRLgtWmcnnRZFxBaooTRt/pie4/Htut/j/e45p8dzzqxv3ezx/vHc931dz4/3Pe+A/7s429mAD4AIC7s3gBqtLwImOfqeBmY0VogumABBX2bDJzhaOEpyNL/DuatsPPAMEM2R50/lJfAh8KYHdHF19+Vrlj3PHZokQA+JvJM9p35OAh8B1wn8iCZvV5PIJyeBTlu9lcDHadCvWVCtRSTiC5tliMS3immNFDDnxlNAfUYxnX8QIHgNC3/mqMpO/rf+OjBNEg+afUySfpyBcfcewbWJamkktvpqh4AHBnmsPtDmn4wd+BQYKQaOmgk223Fd1J46hX0nT2JnczMSs7OYGx7GVF8fVqembCUZsSTQ+yTwvAQDAmT2bBnwvpynMs+o2nTcqipEBgZQ3d7uRxbHxlC2fz9KqquxNjODH0hq4fJlW2kQI8ZyB7BTAgEWt/0lcaiD7dOtC7TjoDka9cGnensxeugQvo1EfP3T2bM+iZbBQVTU12/dI41R8RmfDJrgjgNcfR3pvK5s/ODmZABOv7KtDY3nzuGvS5cw0dmJjfn59ArW1rAUiwGpFO4/cQIbS0u4PTISrM7Wj1tf9y7win8En/NlUwq8qATyHYOQtklJTQ0eu3kTS/E44keO2FIyYktAq+w4dgDHFFx80xa/UEnxMq6RgBsOF9SD4Kd9AgQ86BuFIuXIW+exuJWV/l3KkeZPlQPt7kUeLZ9P/itMZHfkiFRCfAIC8TwUhUJwOEK7d2P91q1gymZw0QdcIjfK6s2mkpx9DA9fu4YdfOal+cbKCjxeOJsUlZfD4dPSNDqKH5uarH31jlGH3DogsWwBzG5e1tDgg0tcQPJJKXdGFpG9EKkzYo572PNujJGxEbT29hIJa3yroJdM5r0H3IF12f0Uwdc5/qt7GHDKt6hK4E/JWeF31bygiyNDbdX5GrHEKlJv9lBb9YGKiokiXpiNvbt2TSiwTppa7O2IuSCzn2Khu3sovbienl4NSqKZrH7wq1UgE8nXWlMrDqeTiEa/SBM4cybGT58ZcXQoCcGTmFPKl/U9iDyu2sumG0pKfmO73wVH5Jeqrq4vF/v7T6fdNKjaopPj43AbG81QTjslr+QtMvg8JZBIvMbjXw121vO8oynHOf8H8JAwVtGXhvqmts3ZYmaN2LW1tXFMTz9HAmMmVqzY894m62Vzy/QozJjatjlbTPNF8xU2S/BXBVzISMwXBm7T+GpvPB7lKlbNouym2b6Zm21Lrg7OLYY97y2GRn1Q/pH8QEjie0QiV2ovXDhPEivaTBLU1gLTz2Vrc+Ys7PG8N+gPEyf4cAzugCaK5n3oojq87Dgv8FN6j5xroaIEtUb8cGnpr1hdfY/mdwTnD/Bd0fy7EVpM6qe6XuF50XB9fYzN7khiIUMbSS4/cufCx49f3AT/Jhtccq07oE24E220j3GE0Nr6eCoWO7gA7ONPuH7maWqg+Yglq4uLp9HRMYmhoauc4IOFKwT3L12QuGnkJCA5JCH/KW3heJSDX28Fyxwz+UPrBBfOVvk3upohLEqApQ4AAAAASUVORK5CYII="
     exit
 else
-    echo "VPN ❌"
-    # Alternative icon -> but too similar to "connected"
-    #echo "VPN 🔓"
+    echo "| image=iVBORw0KGgoAAAANSUhEUgAAACYAAAAiCAYAAAAzrKu4AAAAAXNSR0IArs4c6QAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABHppVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iCiAgICAgICAgICAgIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIgogICAgICAgICAgICB4bWxuczp0aWZmPSJodHRwOi8vbnMuYWRvYmUuY29tL3RpZmYvMS4wLyIKICAgICAgICAgICAgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIj4KICAgICAgICAgPHhtcE1NOkRlcml2ZWRGcm9tIHJkZjpwYXJzZVR5cGU9IlJlc291cmNlIj4KICAgICAgICAgICAgPHN0UmVmOmluc3RhbmNlSUQ+eG1wLmlpZDpGQTdGMTE3NDA3MjA2ODExODNEMUQ5M0NCNjUwQUFDNDwvc3RSZWY6aW5zdGFuY2VJRD4KICAgICAgICAgICAgPHN0UmVmOmRvY3VtZW50SUQ+eG1wLmRpZDpCMzQ0NDBBNDI3MjA2ODExODA4M0QyQTNDOEI4OERCNTwvc3RSZWY6ZG9jdW1lbnRJRD4KICAgICAgICAgPC94bXBNTTpEZXJpdmVkRnJvbT4KICAgICAgICAgPHhtcE1NOkRvY3VtZW50SUQ+eG1wLmRpZDpFNTk2RDRBQjFCQkIxMUU0QjQwMzgxMjIzMzNFNzhCNDwveG1wTU06RG9jdW1lbnRJRD4KICAgICAgICAgPHhtcE1NOkluc3RhbmNlSUQ+eG1wLmlpZDpFNTk2RDRBQTFCQkIxMUU0QjQwMzgxMjIzMzNFNzhCNDwveG1wTU06SW5zdGFuY2VJRD4KICAgICAgICAgPHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD54bXAuZGlkOkIzNDQ0MEE0MjcyMDY4MTE4MDgzRDJBM0M4Qjg4REI1PC94bXBNTTpPcmlnaW5hbERvY3VtZW50SUQ+CiAgICAgICAgIDx0aWZmOk9yaWVudGF0aW9uPjE8L3RpZmY6T3JpZW50YXRpb24+CiAgICAgICAgIDx4bXA6Q3JlYXRvclRvb2w+QWRvYmUgUGhvdG9zaG9wIENTNiAoTWFjaW50b3NoKTwveG1wOkNyZWF0b3JUb29sPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4KgkYZUAAAAy1JREFUWAnNlsmPjEEYh9tu7LHGnjFciO1EjJu5EImjxM2FGzdHf4Sj+CNIiAhulsTFJBOJw4wlgwljC7GH8Tyta/rt0ntPi1/y9PdW1VtVb1e9X31VKPynmtZiXNPxX1diBc9FMBvUd/gA4/CsxC+ebanZwJx8O2yDuU3O9BW/BzAEBt2SmgmsjxH3QU9LI5edv2DegZFyVWNrRh0Xg94Pe2BWHb9GTfbdBP6x0UbOqb3Wilk/AL3JMTy/YQ+DefQGPoN/cD4sBnNwM8yBXI+puAETeUNerhVYP47mU9RPCvfBnPkRG6rYrpI5uRvyXTHvbkNd5Z107gO3L+ojhcvwCJp50/QZg6ewHuLqraT8Ht5BTeWB+fYdhJhTnyhfAo+CVmXiu33+2XSsOMZqeAjuQlXlge3Ca0PwtONV8B+2K7f9JWwBz0HlH3dsV7WqkqON2nlemU+vbOxQjuFYUc4V549thZmh5NsUD0/fvsHQ3ql5jwGkKcWIDSzKxG35xI4DdGLHwJZnAz3Jyu0WTfpTcBd8u0XbuvhCUCwrbuWScnXRep2V2ymupZPHjC9V1F4KchwOw3OoUFyxPHpP9E7keNWCimMa8BWI51yxPQYWO2jnR0ne3qh8Eoe0UubqaVhWQjvl707sE1ChGFhyTA7zktHm81jodwb7HLwtoX0WkqJvsS5+K49Qsyp58rwOntrtyuMmpYcrZVBRSyl4CVD6xqOq4oAbL7qUfzaWza5bf10K4lZ6jYkysPSPY3037PhtLo6fB+Z1OMk3JSVvquvWs+6KeVXxrhTlncprSivydvIC4mqbSxMZKb+oLiwA+9i3qJj8VjjYUeixUJLXnovgsxk5gdeadjRGpzV2zAOzzrvTAY0gPyPXIH+zgsuk6cp0omJM1QJz0H7Ir0Den4ZgEPIzj6pJdTUwAx6A3snpyoZnzjCMgiuYPl3mqOpqYE5gcK7cVgtN6HzJZ0oCi8dFPrcT3IKb4N39nypee2pNPEKD27YDXL2KTwflrqhW8teazBX2piuebwshXVkuYKsp2co/Q03tr+eYwbWD51jXdIiRnaDVwPxW2/f/1m/ZE6Wmh5XVtgAAAABJRU5ErkJggg=="
     echo '---'
-    echo "Connect VPN | bash='$0' param1=connect terminal=false refresh=true"
-    # For debugging!
-    #echo "Connect VPN | bash='$0' param1=connect terminal=true refresh=true"
+    echo "VPN verbinden (Split Tunneling) | bash='$0' param1=connect_split terminal=false refresh=true image=iVBORw0KGgoAAAANSUhEUgAAACAAAAAiCAYAAAA+stv/AAAAAXNSR0IArs4c6QAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABBNpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iCiAgICAgICAgICAgIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iCiAgICAgICAgICAgIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj4KICAgICAgICAgPHhtcE1NOkRlcml2ZWRGcm9tIHJkZjpwYXJzZVR5cGU9IlJlc291cmNlIj4KICAgICAgICAgICAgPHN0UmVmOmluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyNjM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6aW5zdGFuY2VJRD4KICAgICAgICAgICAgPHN0UmVmOmRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyNzM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6ZG9jdW1lbnRJRD4KICAgICAgICAgPC94bXBNTTpEZXJpdmVkRnJvbT4KICAgICAgICAgPHhtcE1NOkRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyOTM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0NzwveG1wTU06RG9jdW1lbnRJRD4KICAgICAgICAgPHhtcE1NOkluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyODM1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"
+    echo "VPN verbinden (Default Route, Internal DNS) | bash='$0' param1=connect terminal=false refresh=true image=iVBORw0KGgoAAAANSUhEUgAAACAAAAAiCAYAAAA+stv/AAAAAXNSR0IArs4c6QAAAAlwSFlzAAAWJQAAFiUBSVIk8AAABBNpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iCiAgICAgICAgICAgIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIgogICAgICAgICAgICB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iCiAgICAgICAgICAgIHhtbG5zOnRpZmY9Imh0dHA6Ly9ucy5hZG9iZS5jb20vdGlmZi8xLjAvIj4KICAgICAgICAgPHhtcE1NOkRlcml2ZWRGcm9tIHJkZjpwYXJzZVR5cGU9IlJlc291cmNlIj4KICAgICAgICAgICAgPHN0UmVmOmluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyNjM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6aW5zdGFuY2VJRD4KICAgICAgICAgICAgPHN0UmVmOmRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyNzM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0Nzwvc3RSZWY6ZG9jdW1lbnRJRD4KICAgICAgICAgPC94bXBNTTpEZXJpdmVkRnJvbT4KICAgICAgICAgPHhtcE1NOkRvY3VtZW50SUQ+eG1wLmRpZDo3MTg2NDYyOTM1ODQxMUUyOEMwRkNDMjg0MThFQzQ0NzwveG1wTU06RG9jdW1lbnRJRD4KICAgICAgICAgPHhtcE1NOkluc3RhbmNlSUQ+eG1wLmlpZDo3MTg2NDYyODM1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"
     exit
 fi
